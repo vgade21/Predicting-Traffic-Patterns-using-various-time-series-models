@@ -9,13 +9,21 @@ The goal of this project is to develop an accurate forecasting model that can pr
 The dataset contains several variables that describe different aspects related to traffic volume, weather conditions, and date-time information. These variables include:
 
 holiday: Categorical feature indicating US national holidays, regional holidays, and the Minnesota State Fair.
+
 temp: Numeric feature representing the average temperature in Kelvin.
+
 rain_1h: Numeric feature indicating the amount of rain in millimeters that occurred in the hour.
+
 snow_1h: Numeric feature indicating the amount of snow in millimeters that occurred in the hour.
+
 clouds_all: Numeric feature representing the percentage of cloud cover.
+
 weather_main: Categorical feature providing a short textual description of the current weather.
+
 weather_description: Categorical feature providing a longer textual description of the current weather.
+
 date_time: DateTime feature indicating the hour of the data collection in local CST time.
+
 traffic_volume: Numeric feature representing the hourly reported westbound traffic volume on I-94 ATR 301.
 
 To achieve the objective of accurate traffic volume forecasting, the project evaluates different families of time series models. These include:
