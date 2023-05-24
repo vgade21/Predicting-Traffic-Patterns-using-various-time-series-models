@@ -1,0 +1,477 @@
+---
+  title: "TS project_3"
+author: "Vamshi Gadepally"
+date: "2023-05-06"
+output: html_document
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Import Libraries}
+library(fpp)
+library(TSA)
+library(tseries)
+library(ggplot2)
+library(forecast)
+library(caret)
+library(lubridate)
+library(dplyr)
+library(AICcmodavg)
+```
+
+```{r Q1}
+data <- read.csv("Metro_Interstate_Traffic_Volume.csv")
+```
+
+```{r Q18}
+# Missing temp values (zero degree Kelvin entries)
+missing_temp_indices <- which(data$temp==0)
+missing_temp_indices
+```
+
+```{r Q19}
+# Replacing the missing temp values (zero degree Kelvin entries) with the previous recorded temp value
+# values before imputation
+data$temp[11898:11905]
+data$temp[11946:11955]
+
+# substitute the values of the missing temperature with the temperature of the previous hour
+for (i in missing_temp_indices) {
+  data[i, "temp"] <- data[i - 1, "temp"]}
+
+# values after imputation
+data$temp[11898:11905]
+data$temp[11946:11955]
+```
+
+```{r Q2}
+# Transform temp column from Kelvin to Fahrenheit
+data$temp_f <- (data$temp - 273.15) * 1.8 + 32
+```
+
+```{r Q3}
+# Create new column with day of the week (in numeric form)
+data$day_of_week <- wday(ymd_hms(data$date_time)) #Sunday is 1
+```
+
+```{r Q4}
+# Create binary column for holiday
+data$holiday_binary <- ifelse(data$holiday != "None", 1, 0)
+# Create binary column for rain_1h
+data$rain_1h_binary = ifelse(data$rain_1h > 0, 1, 0)
+# Create binary column for snow_1h
+data$snow_1h_binary = ifelse(data$snow_1h > 0, 1, 0)
+# Extract the hour value
+data$hour <- hour(as.POSIXct(data$date_time))
+```
+
+```{r Q20}
+# Check for missing values
+missing_values <- sapply(data, function(x) sum(is.na(x)))
+missing_values_data <- data.frame(Variable = names(data), Missing_Values = missing_values)
+missing_values_data # No missing values
+```
+
+```{r Q6}
+# Creating a copy for some EDA
+data_2<-data.frame(data)
+```
+
+```{r Q6}
+# Convert the 'date_time' column to a date format
+data_2$date <- as.Date(data_2$date_time)
+
+# Extract month and year information
+data_2$month <- format(data_2$date, "%m")
+data_2$year <- format(data_2$date, "%Y")
+
+# Create a function to count the number of '1' observations in each Categorical variable
+count_ones <- function(variable) {
+  table(data_2$year, data_2$month, data_2[[variable]] == 1)
+}
+```
+
+```{r Q6}
+# Apply the function to each binary variable
+rain_count <- count_ones("rain_1h_binary")
+snow_count <- count_ones("snow_1h_binary")
+holiday_count <- count_ones("holiday_binary")
+
+# Display the results
+print("Rain:")
+print(rain_count)
+print("Snow:")         # Snow has sparse data. Observations of snow ('1') in Dec 2015 and Jan 2016 only
+print(snow_count)
+print("Holiday:")
+print(holiday_count)
+```
+
+
+```{r Q5}
+# Delete unused columns
+df <- subset(data, select = -c(holiday, temp, clouds_all, weather_main, weather_description, snow_1h, rain_1h, snow_1h_binary))
+```
+
+
+```{r Q16}
+# Splitting the data into training and testing sets
+# The original data is hourly data for over 7 years, this is too much data and will lead to incorrect forecasts. Therefore we will look at only 6 months of 
+# data.
+# Note: this it the data that wasn't detrended / deseasonalized or transformed
+
+# Train/Test Split
+df$date_time <- as.POSIXct(df$date_time, format = "%Y-%m-%d %H:%M:%S")
+
+# Create the train dataframe (May to August 2018)
+train_start <- as.Date("2018-05-01")
+train_end <- as.Date("2018-08-31")
+train_df <- subset(df, date_time >= train_start & date_time <= train_end)
+
+# Create the test dataframe (September 2018)
+test_start <- as.Date("2018-09-01")
+test_end <- as.Date("2018-09-30")
+test_df <- subset(df, date_time >= test_start & date_time <= test_end)
+```
+
+```{r}
+index_start <- which(df$date_time == train_start)
+index_end <- which(df$date_time == train_end)
+
+df1 <- df[index_start:index_end,]
+
+```
+
+```{r}
+# Getting the response variable and lambda_value
+response_24 <- ts(df1$traffic_volume, frequency = 24)
+lambda_value = BoxCox.lambda(response_24)
+
+#visualizing raw ts 
+tsdisplay(response_24)
+```
+
+```{r}
+# # Getting the response variable and lambda_value frequuency =168
+response_168 <- ts(df1$traffic_volume, frequency = 168)
+lambda_value = BoxCox.lambda(response_168)
+
+#visualizing raw ts 
+tsdisplay(response_168)
+```
+
+```{r}
+#seasonal differencing 
+response_24_diff <- diff(response_24, lag = 24)
+tsdisplay(response_24_diff)
+adf.test(response_24_diff) #The time series has a unit root (non-stationary)
+kpss.test(response_24_diff) #The null hypothesis to be tested: either level or trend stationarity.
+
+```
+
+
+```{r}
+
+#seasonal differencing 
+response_168_diff <- diff(response_168, lag = 168)
+tsdisplay(response_168_diff)
+adf.test(response_168_diff) #The time series has a unit root (non-stationary)
+kpss.test(response_168_diff) #The null hypothesis to be tested: either level or trend stationarity.
+
+```
+
+```{r}
+View(df1)
+```
+
+
+```{r}
+#multivariate linear regression with all variables
+traffic <- response_24
+
+temp_f <- df1[,"temp_f"]
+holiday <- df1[,"holiday_binary"]
+rain <- df1[,"rain_1h_binary"]
+
+# Fit a linear model
+lin_model3 <- tslm(traffic ~ temp_f + holiday + rain)
+summary(lin_model3)
+checkresiduals(lin_model3)
+pacf(lin_model3$residuals)
+```
+
+
+```{r}
+#multivariate linear regression with most variables as factors! 
+
+# Fit a linear model
+lin_model3 <- tslm(traffic ~ temp_f + factor(holiday) + factor(rain))
+summary(lin_model3)
+checkresiduals(lin_model3)
+pacf(lin_model3$residuals)
+```
+
+Not good at all! Seems like those factors are not very useful to predict traffic as much as date and time.. We will still try to fit the arima with regression errors. 
+
+
+
+
+
+Starting ARIMA
+
+```{r}
+#ARIMA with multiple regression errors
+traffic <- response_24
+
+exogenous <- df1[, c("temp_f", "rain_1h_binary", "holiday_binary")]
+
+# Convert the exogenous variables to a matrix
+exogenous_matrix <- as.matrix(exogenous)
+
+# Fit the auto.arima model with xreg
+model<- auto.arima(traffic, xreg = exogenous_matrix, lambda = lambda_value, D = 1) 
+
+summary(model)
+checkresiduals(model)
+```
+```{r}
+#2 additional variables. 
+traffic <- response_24
+
+exogenous <- df1[, c("temp_f", "rain_1h_binary", "holiday_binary", "day_of_week", "hour")]
+
+# Convert the exogenous variables to a matrix
+exogenous_matrix <- as.matrix(exogenous)
+
+# Fit the auto.arima model with xreg
+model2<- auto.arima(traffic, xreg = exogenous_matrix, lambda = lambda_value, D = 1) 
+
+summary(model2)
+checkresiduals(model2)
+```
+model 2 is better in terms of RMSE and AICc even though some variables in the regression are not significant...
+
+
+```{r}
+#different frequency in ts, freq = 168
+traffic <- response_168
+
+#only 3 variables..
+exogenous <- df1[, c("temp_f", "rain_1h_binary", "holiday_binary")]
+
+# Convert the exogenous variables to a matrix
+exogenous_matrix <- as.matrix(exogenous)
+
+# Fit the auto.arima model with xreg
+model_1 <- auto.arima(traffic, xreg = exogenous_matrix, lambda = lambda_value, D = 1) 
+
+summary(model_1)
+checkresiduals(model_1)
+
+```
+Did not benefit.. very bad ACF..
+
+
+FORECASTING USING ARIMAX
+```{r}
+#forecast horizon in hours 
+n <- (24*30)
+head_test <- head(test_df$traffic_volume, n) #test data.. 
+test_ts <- ts(head_test, freq = 24, start = c(147,22))
+```
+
+First we need to forecast the Xreg variables.. 
+```{r}
+#Let create a scenario without rain nor holidays and a naive forecast for temperature 
+rain_forecast = df[(index_end+1):(index_end+n), "rain_1h_binary"] #Rain forecast(test set)
+#rain_forecast= rep(0,n) #simpler way.. 
+
+holiday_forecast= df[(index_end+1):(index_end+n), "holiday_binary"] #holiday forecast(test set)
+#holiday_forecast = rep(0,n) #simpler way
+
+#constant_weather = rep(60,n) #simpler way
+true_weather = df[(index_end+1):(index_end+n), "temp_f"] # weather forecast (test set)
+```
+
+Plotting the ARIMAX forecasts
+```{r}
+# ARIMAX forecast for freq = 24 and 3 variables
+#Forecast horizon defined as n above.. 
+
+#Preparing xreg variables
+xreg_vars <- data.frame(true_weather, rain_forecast, holiday_forecast)
+xreg_vars <- as.matrix(xreg_vars[,1:3])
+
+# Rename the columns
+colnames(xreg_vars) <- c("temp_f", "rain_1h_binary", "holiday_binary")
+
+#Forecasting
+fcast <- forecast(model, xreg= xreg_vars ,h=n)
+
+# plot the forecast 
+autoplot(response_24, series = "Actual") +
+  autolayer(fcast, series = "ARIMAX forecast") +
+  xlab("Time (days)") +
+  ylab("Traffic Volume") +
+  ylim(-10000, 20000) +
+  ggtitle("September Daily Traffic Volume with ARIMAX")
+
+```
+#creating hour and day forecasts.. 
+```{r}
+#get the last number in the sequence
+last_number <- tail(df1$hour,1)
+tail(df1$hour,7)
+n_hour_forecast <- integer()
+
+# Generate the sequence
+last_number <-last_number+ 1
+for (i in 1:n) {
+  n_hour_forecast <- c(n_hour_forecast, last_number)
+  
+  # Increment last_number and reset to 1 if it reaches 24
+  last_number <- last_number + 1
+  if (last_number > 23) {
+    last_number <- 0
+  }
+}
+n_hour_forecast
+```
+
+```{r}
+#forecasting the day of week for n hours in advance..  
+#get the last number in the sequence
+last_number <- tail(df1$day,1)
+
+#Getting how many hours where recorded on last day
+counter <- 0
+sequence <- tail(df1$day,24)
+
+# Iterate through the sequence from the end 
+for (i in rev(seq_along(sequence))) {
+  if (sequence[i] == last_number) {
+    counter <- counter + 1
+  } else {
+    break
+  }
+}
+# Print the result
+print("last number = ")
+print(last_number)
+print("repeated  = ")
+
+#Completing the next day
+n_following_days <- rep(last_number, (24-counter))
+observations_generated = (24-counter)
+
+print(length(n_following_days))
+
+if (last_number!=7){
+  last_number <- last_number + 1
+}else { 
+  last_number <-1
+}
+
+#Generate following days 
+while (observations_generated < n) {
+  # Generate 24 observations with the current last_number
+  next_observations <- rep(last_number, 24)
+  
+  # Append current obs to previously generated
+  n_following_days <- c(n_following_days, next_observations)
+  
+  # Update the counter
+  observations_generated <- observations_generated + 24
+  
+  # Increment the last_number
+  last_number <- last_number + 1
+  
+  # Reset last_number to 1 if it reaches 8
+  if (last_number > 7) {
+    last_number <- 1
+  }
+}
+
+n_following_days <- head(n_following_days,n)
+n_following_days
+```
+
+
+```{r}
+# 2 additional variables = model2
+
+#Preparing xreg variables
+xreg_vars <- data.frame(true_weather, rain_forecast, holiday_forecast, n_following_days, n_hour_forecast)
+xreg_vars <- as.matrix(xreg_vars[,1:5])
+
+# Rename the columns
+colnames(xreg_vars) <- c("temp_f", "rain_1h_binary", "holiday_binary", "day_of_week", "hour")
+
+#Forecasting
+fcast <- forecast(model2, xreg= xreg_vars ,h=n)
+
+# plot the forecast 
+autoplot(response_24, series = "Actual") +
+  autolayer(fcast, series = "ARIMAX forecast")+
+  xlab("Time (days)") +
+  ylab("Traffic Volume") +
+  ylim(-10000, 20000) +
+  ggtitle("September Daily Traffic Volume with ARIMAX") + 
+  theme(plot.title = element_text(size = 20),             # Increase the title font size
+        axis.title = element_text(size = 16),             # Increase the axis label font size
+        axis.text = element_text(size = 14),              # Increase the tick label font size
+        legend.text = element_text(size = 12),            # Increase the legend font size
+        panel.background = element_rect(fill = "white"))
+```
+Those 2 additional variables are not significant. 
+
+
+
+
+Now lets try with Seasonality = 168
+```{r}
+# ARIMAX forecast
+#Forecast horizon defined as n above.. 
+
+#Preparing xreg variables
+xreg_vars <- data.frame(true_weather, rain_forecast, holiday_forecast)
+xreg_vars <- as.matrix(xreg_vars[,1:3])
+
+# Rename the columns
+colnames(xreg_vars) <- c("temp_f", "rain_1h_binary", "holiday_binary")
+
+#Forecasting
+fcast <- forecast(model_1, xreg= xreg_vars ,h=n)
+
+test_ts_168 = ts(head_test, freq = 168, start = c(21,166))
+  
+# plot the forecast 
+
+#png("ARIMAX_weekly_with_test.png", width = 1200, height = 800)
+autoplot(tail(response_168, 1344), series = "Actual") +
+  autolayer(fcast$mean, series = "ARIMAX forecast") +
+  autolayer(test_ts_168, series = "Test") + #Optional!
+  xlab("Time (weeks)") +
+  ylab("Traffic Volume") +
+  ylim(-10000, 20000) +
+  ggtitle("September Weekly Traffic Volume with ARIMAX")+
+  theme(plot.title = element_text(size = 20),             # Increase the title font size
+        axis.title = element_text(size = 16),             # Increase the axis label font size
+        axis.text = element_text(size = 14),              # Increase the tick label font size
+        legend.text = element_text(size = 12),            # Increase the legend font size
+        panel.background = element_rect(fill = "white"))
+
+#dev.off()
+```
+Seems pretty good.. I think arima is doing the whole thing and the regressors are not doing much based on the coefficients of the model and their standard errors... still, this is the one that fits best.. 
+```{r}
+# Calculate Mean Absolute Error (MAE)
+mae <- mean(abs(fcast$mean - test_ts_168))
+print(paste("MAE:", mae))
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse <- sqrt(mean((fcast$mean - test_ts_168)^2))
+print(paste("RMSE:", rmse))
+```
+This last plot and error metrics are the ones Ill put in the ppt. 
